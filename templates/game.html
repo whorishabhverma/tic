@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <link rel="stylesheet" href="/static/css/game.css">
     <style>
-        .voice-controls {
+        .video-controls {
             margin: 20px 0;
             padding: 15px;
             background: #f5f5f5;
@@ -17,7 +17,7 @@
             flex-wrap: wrap;
         }
 
-        .voice-btn {
+        .video-btn {
             padding: 8px 16px;
             border-radius: 5px;
             border: 1px solid #ccc;
@@ -29,11 +29,11 @@
             transition: all 0.3s;
         }
 
-        .voice-btn.active {
+        .video-btn.active {
             background: #e0e0e0;
         }
 
-        .voice-btn:disabled {
+        .video-btn:disabled {
             opacity: 0.5;
             cursor: not-allowed;
         }
@@ -46,23 +46,37 @@
             background: #fff;
         }
 
-        .audio-indicator {
-            width: 20px;
-            height: 20px;
-            border-radius: 50%;
-            background: #ccc;
-            margin-left: 10px;
+        .video-container {
+            display: flex;
+            justify-content: center;
+            gap: 20px;
+            margin-bottom: 20px;
+            flex-wrap: wrap;
         }
 
-        .audio-indicator.active {
-            background: #4CAF50;
-            animation: pulse 1.5s infinite;
+        .video-wrapper {
+            position: relative;
+            width: 320px;
+            background: #000;
+            border-radius: 8px;
+            overflow: hidden;
         }
 
-        @keyframes pulse {
-            0% { transform: scale(1); }
-            50% { transform: scale(1.1); }
-            100% { transform: scale(1); }
+        .video-wrapper video {
+            width: 100%;
+            height: 240px;
+            object-fit: cover;
+        }
+
+        .video-label {
+            position: absolute;
+            bottom: 10px;
+            left: 10px;
+            background: rgba(0, 0, 0, 0.5);
+            color: white;
+            padding: 4px 8px;
+            border-radius: 4px;
+            font-size: 12px;
         }
     </style>
 </head>
@@ -70,16 +84,27 @@
     <div class="container">
         <h1>Tic Tac Toe Game</h1>
         
-        <!-- Voice Chat Controls -->
-        <div class="voice-controls">
-            <button id="micToggle" class="voice-btn" disabled>
+        <!-- Video Chat Controls -->
+        <div class="video-controls">
+            <button id="cameraToggle" class="video-btn" disabled>
+                <span class="camera-icon">📷</span> Camera
+            </button>
+            <button id="micToggle" class="video-btn" disabled>
                 <span class="mic-icon">🎤</span> Microphone
             </button>
-            <button id="speakerToggle" class="voice-btn" disabled>
-                <span class="speaker-icon">🔊</span> Speaker
-            </button>
-            <div id="connectionStatus" class="connection-status">Voice: Waiting for opponent...</div>
-            <div id="audioIndicator" class="audio-indicator"></div>
+            <div id="connectionStatus" class="connection-status">Video: Waiting for opponent...</div>
+        </div>
+
+        <!-- Video Streams -->
+        <div class="video-container">
+            <div class="video-wrapper">
+                <video id="localVideo" autoplay muted playsinline></video>
+                <div class="video-label">You</div>
+            </div>
+            <div class="video-wrapper">
+                <video id="remoteVideo" autoplay playsinline></video>
+                <div class="video-label">Opponent</div>
+            </div>
         </div>
 
         <div class="game-link">
@@ -114,11 +139,8 @@
         let peerConnection;
         let localStream;
         let remoteStream;
-        let isMuted = false;
-        let isSpeakerOn = true;
-        let audioContext;
-        let audioAnalyser;
-        let audioDataArray;
+        let isVideoMuted = false;
+        let isAudioMuted = false;
 
         // WebRTC configuration
         const configuration = {
@@ -131,30 +153,13 @@
             ]
         };
 
-        // Audio visualization setup
-        function setupAudioVisualization(stream) {
-            audioContext = new (window.AudioContext || window.webkitAudioContext)();
-            const source = audioContext.createMediaStreamSource(stream);
-            audioAnalyser = audioContext.createAnalyser();
-            audioAnalyser.fftSize = 32;
-            source.connect(audioAnalyser);
-            audioDataArray = new Uint8Array(audioAnalyser.frequencyBinCount);
-
-            // Visualize audio levels
-            function visualize() {
-                if (!audioAnalyser) return;
-                audioAnalyser.getByteFrequencyData(audioDataArray);
-                const audioLevel = audioDataArray.reduce((a, b) => a + b) / audioDataArray.length;
-                const indicator = document.getElementById('audioIndicator');
-                indicator.classList.toggle('active', audioLevel > 50);
-                requestAnimationFrame(visualize);
-            }
-            visualize();
-        }
-
-        async function initializeVoiceChat() {
+        async function initializeVideoChat() {
             try {
                 localStream = await navigator.mediaDevices.getUserMedia({ 
+                    video: {
+                        width: { ideal: 1280 },
+                        height: { ideal: 720 }
+                    },
                     audio: {
                         echoCancellation: true,
                         noiseSuppression: true,
@@ -162,19 +167,19 @@
                     }
                 });
                 
-                setupAudioVisualization(localStream);
+                document.getElementById('localVideo').srcObject = localStream;
                 
+                const cameraToggle = document.getElementById('cameraToggle');
                 const micToggle = document.getElementById('micToggle');
-                const speakerToggle = document.getElementById('speakerToggle');
+                cameraToggle.disabled = false;
                 micToggle.disabled = false;
-                speakerToggle.disabled = false;
                 
                 setupPeerConnection();
                 
-                document.getElementById('connectionStatus').textContent = 'Voice: Ready';
+                document.getElementById('connectionStatus').textContent = 'Video: Ready';
             } catch (err) {
-                console.error('Error accessing microphone:', err);
-                document.getElementById('connectionStatus').textContent = 'Voice: Microphone access denied';
+                console.error('Error accessing camera/microphone:', err);
+                document.getElementById('connectionStatus').textContent = 'Video: Camera/Microphone access denied';
             }
         }
 
@@ -187,7 +192,7 @@
 
             peerConnection.ontrack = (event) => {
                 remoteStream = event.streams[0];
-                setupAudioVisualization(remoteStream);
+                document.getElementById('remoteVideo').srcObject = remoteStream;
             };
 
             peerConnection.onicecandidate = (event) => {
@@ -203,40 +208,44 @@
                 const statusElement = document.getElementById('connectionStatus');
                 switch(peerConnection.connectionState) {
                     case 'connected':
-                        statusElement.textContent = 'Voice: Connected';
+                        statusElement.textContent = 'Video: Connected';
                         break;
                     case 'disconnected':
-                        statusElement.textContent = 'Voice: Disconnected';
+                        statusElement.textContent = 'Video: Disconnected';
                         break;
                     case 'failed':
-                        statusElement.textContent = 'Voice: Connection failed';
+                        statusElement.textContent = 'Video: Connection failed';
                         break;
                 }
             };
         }
 
-        document.getElementById('micToggle').addEventListener('click', () => {
-            isMuted = !isMuted;
+        document.getElementById('cameraToggle').addEventListener('click', () => {
+            isVideoMuted = !isVideoMuted;
             if (localStream) {
-                localStream.getAudioTracks()[0].enabled = !isMuted;
+                localStream.getVideoTracks().forEach(track => {
+                    track.enabled = !isVideoMuted;
+                });
             }
-            const micButton = document.getElementById('micToggle');
-            micButton.innerHTML = isMuted ? 
-                '<span class="mic-icon">🎤</span> Unmute' : 
-                '<span class="mic-icon">🎤</span> Mute';
-            micButton.classList.toggle('active', isMuted);
+            const cameraButton = document.getElementById('cameraToggle');
+            cameraButton.innerHTML = isVideoMuted ? 
+                '<span class="camera-icon">📷</span> Start Video' : 
+                '<span class="camera-icon">📷</span> Stop Video';
+            cameraButton.classList.toggle('active', isVideoMuted);
         });
 
-        document.getElementById('speakerToggle').addEventListener('click', () => {
-            isSpeakerOn = !isSpeakerOn;
-            if (remoteStream) {
-                remoteStream.getAudioTracks()[0].enabled = isSpeakerOn;
+        document.getElementById('micToggle').addEventListener('click', () => {
+            isAudioMuted = !isAudioMuted;
+            if (localStream) {
+                localStream.getAudioTracks().forEach(track => {
+                    track.enabled = !isAudioMuted;
+                });
             }
-            const speakerButton = document.getElementById('speakerToggle');
-            speakerButton.innerHTML = isSpeakerOn ? 
-                '<span class="speaker-icon">🔊</span> Speaker' : 
-                '<span class="speaker-icon">🔈</span> Muted';
-            speakerButton.classList.toggle('active', !isSpeakerOn);
+            const micButton = document.getElementById('micToggle');
+            micButton.innerHTML = isAudioMuted ? 
+                '<span class="mic-icon">🎤</span> Unmute' : 
+                '<span class="mic-icon">🎤</span> Mute';
+            micButton.classList.toggle('active', isAudioMuted);
         });
 
         function connect() {
@@ -249,7 +258,7 @@
             socket = new WebSocket(wsUrl);
 
             socket.onopen = function() {
-                initializeVoiceChat();
+                initializeVideoChat();
             };
 
             socket.onmessage = async function(event) {
@@ -339,9 +348,6 @@
                 if (localStream) {
                     localStream.getTracks().forEach(track => track.stop());
                 }
-                if (audioContext) {
-                    audioContext.close();
-                }
             };
         }
 
@@ -417,17 +423,24 @@
         // Handle page visibility changes
         document.addEventListener('visibilitychange', () => {
             if (document.hidden && localStream) {
-                // Mute audio when tab is not visible
-                localStream.getAudioTracks().forEach(track => {
+                // Pause video and audio when tab is not visible
+                localStream.getTracks().forEach(track => {
                     track.enabled = false;
                 });
+                document.getElementById('cameraToggle').classList.add('active');
                 document.getElementById('micToggle').classList.add('active');
-            } else if (!document.hidden && localStream && !isMuted) {
-                // Unmute audio when tab becomes visible (if not manually muted)
-                localStream.getAudioTracks().forEach(track => {
-                    track.enabled = true;
+            } else if (!document.hidden && localStream) {
+                // Resume video and audio when tab becomes visible (if not manually muted)
+                localStream.getTracks().forEach(track => {
+                    if (track.kind === 'video' && !isVideoMuted) {
+                        track.enabled = true;
+                    }
+                    if (track.kind === 'audio' && !isAudioMuted) {
+                        track.enabled = true;
+                    }
                 });
-                document.getElementById('micToggle').classList.remove('active');
+                if (!isVideoMuted) document.getElementById('cameraToggle').classList.remove('active');
+                if (!isAudioMuted) document.getElementById('micToggle').classList.remove('active');
             }
         });
 
@@ -438,9 +451,6 @@
             }
             if (localStream) {
                 localStream.getTracks().forEach(track => track.stop());
-            }
-            if (audioContext) {
-                audioContext.close();
             }
             if (socket) {
                 socket.close();
