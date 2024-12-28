@@ -245,7 +245,6 @@
     <div class="container">
         <h1>Tic Tac Toe Game</h1>
         
-        <!-- Video Chat Controls -->
         <div class="video-controls">
             <button id="cameraToggle" class="video-btn" disabled>
                 <span class="camera-icon">📷</span> Camera
@@ -256,7 +255,6 @@
             <div id="connectionStatus" class="connection-status">Video: Waiting for opponent...</div>
         </div>
 
-        <!-- Video Streams -->
         <div class="video-container">
             <div class="video-wrapper">
                 <video id="localVideo" autoplay muted playsinline></video>
@@ -311,27 +309,24 @@
             iceServers: [
                 { urls: 'stun:stun.l.google.com:19302' },
                 { urls: 'stun:stun1.l.google.com:19302' },
-                { urls: 'stun:stun2.l.google.com:19302' },
-                { urls: 'stun:stun3.l.google.com:19302' },
-                { urls: 'stun:stun4.l.google.com:19302' }
+                { urls: 'stun:stun2.l.google.com:19302' }
             ]
         };
 
         async function initializeVideoChat() {
             try {
                 localStream = await navigator.mediaDevices.getUserMedia({ 
-                    video: {
-                        width: { ideal: 1280 },
-                        height: { ideal: 720 }
-                    },
-                    audio: {
-                        echoCancellation: true,
-                        noiseSuppression: true,
-                        autoGainControl: true
-                    }
+                    video: true,
+                    audio: true
                 });
                 
-                document.getElementById('localVideo').srcObject = localStream;
+                const localVideo = document.getElementById('localVideo');
+                localVideo.srcObject = localStream;
+                
+                localVideo.onerror = (e) => {
+                    console.error('Local video error:', e);
+                    document.getElementById('connectionStatus').textContent = 'Video: Local stream error';
+                };
                 
                 const cameraToggle = document.getElementById('cameraToggle');
                 const micToggle = document.getElementById('micToggle');
@@ -340,10 +335,10 @@
                 
                 setupPeerConnection();
                 
-                document.getElementById('connectionStatus').textContent = 'Video: Ready';
+                document.getElementById('connectionStatus').textContent = 'Video: Ready - Waiting for opponent...';
             } catch (err) {
                 console.error('Error accessing camera/microphone:', err);
-                document.getElementById('connectionStatus').textContent = 'Video: Camera/Microphone access denied';
+                handleMediaError(err);
             }
         }
 
@@ -354,23 +349,26 @@
             
             peerConnection = new RTCPeerConnection(configuration);
             
-            // Add local stream tracks to the connection
             if (localStream) {
                 localStream.getTracks().forEach(track => {
                     peerConnection.addTrack(track, localStream);
                 });
             }
 
-            // Handle incoming remote stream
             peerConnection.ontrack = (event) => {
+                const remoteVideo = document.getElementById('remoteVideo');
                 if (event.streams && event.streams[0]) {
-                    document.getElementById('remoteVideo').srcObject = event.streams[0];
                     remoteStream = event.streams[0];
+                    remoteVideo.srcObject = remoteStream;
                     document.getElementById('connectionStatus').textContent = 'Video: Connected';
+                    
+                    remoteVideo.onerror = (e) => {
+                        console.error('Remote video error:', e);
+                        document.getElementById('connectionStatus').textContent = 'Video: Remote stream error';
+                    };
                 }
             };
 
-            // Handle ICE candidates
             peerConnection.onicecandidate = (event) => {
                 if (event.candidate) {
                     socket.send(JSON.stringify({
@@ -380,61 +378,73 @@
                 }
             };
 
-            // Connection state changes
             peerConnection.onconnectionstatechange = () => {
+                console.log('Connection state:', peerConnection.connectionState);
                 switch(peerConnection.connectionState) {
                     case 'connected':
                         document.getElementById('connectionStatus').textContent = 'Video: Connected';
                         break;
                     case 'disconnected':
+                        handleDisconnection();
+                        break;
                     case 'failed':
-                        document.getElementById('connectionStatus').textContent = 'Video: Disconnected';
-                        if (remoteStream) {
-                            remoteStream.getTracks().forEach(track => track.stop());
-                            document.getElementById('remoteVideo').srcObject = null;
-                        }
+                        handleConnectionFailure();
                         break;
                     case 'closed':
                         document.getElementById('connectionStatus').textContent = 'Video: Connection closed';
+                        clearRemoteStream();
                         break;
                 }
             };
 
-            // ICE connection state changes
             peerConnection.oniceconnectionstatechange = () => {
                 if (peerConnection.iceConnectionState === 'failed') {
+                    console.log('Attempting to restart ICE');
                     peerConnection.restartIce();
                 }
             };
         }
 
-        document.getElementById('cameraToggle').addEventListener('click', () => {
-            isVideoMuted = !isVideoMuted;
-            if (localStream) {
-                localStream.getVideoTracks().forEach(track => {
-                    track.enabled = !isVideoMuted;
-                });
-            }
-            const cameraButton = document.getElementById('cameraToggle');
-            cameraButton.innerHTML = isVideoMuted ? 
-                '<span class="camera-icon">📷</span> Start Video' : 
-                '<span class="camera-icon">📷</span> Stop Video';
-            cameraButton.classList.toggle('active', isVideoMuted);
-        });
+        function handleDisconnection() {
+            document.getElementById('connectionStatus').textContent = 'Video: Disconnected - Attempting to reconnect...';
+            clearRemoteStream();
+            setTimeout(() => {
+                if (peerConnection.connectionState === 'disconnected') {
+                    setupPeerConnection();
+                }
+            }, 2000);
+        }
 
-        document.getElementById('micToggle').addEventListener('click', () => {
-            isAudioMuted = !isAudioMuted;
-            if (localStream) {
-                localStream.getAudioTracks().forEach(track => {
-                    track.enabled = !isAudioMuted;
-                });
+        function handleConnectionFailure() {
+            document.getElementById('connectionStatus').textContent = 'Video: Connection failed - Retrying...';
+            clearRemoteStream();
+            setTimeout(() => {
+                setupPeerConnection();
+            }, 3000);
+        }
+
+        function clearRemoteStream() {
+            const remoteVideo = document.getElementById('remoteVideo');
+            if (remoteStream) {
+                remoteStream.getTracks().forEach(track => track.stop());
             }
-            const micButton = document.getElementById('micToggle');
-            micButton.innerHTML = isAudioMuted ? 
-                '<span class="mic-icon">🎤</span> Unmute' : 
-                '<span class="mic-icon">🎤</span> Mute';
-            micButton.classList.toggle('active', isAudioMuted);
-        });
+            remoteVideo.srcObject = null;
+            remoteStream = null;
+        }
+
+        function handleMediaError(error) {
+            let errorMessage = 'Video: ';
+            if (error.name === 'NotAllowedError') {
+                errorMessage += 'Camera/Microphone access denied';
+            } else if (error.name === 'NotFoundError') {
+                errorMessage += 'Camera/Microphone not found';
+            } else if (error.name === 'NotReadableError') {
+                errorMessage += 'Camera/Microphone not readable';
+            } else {
+                errorMessage += 'Hardware error occurred';
+            }
+            document.getElementById('connectionStatus').textContent = errorMessage;
+        }
 
         function connect() {
             const gameId = window.location.pathname.split('/').pop();
@@ -540,27 +550,47 @@
             };
         }
 
+        document.getElementById('cameraToggle').addEventListener('click', () => {
+            isVideoMuted = !isVideoMuted;
+            if (localStream) {
+                localStream.getVideoTracks().forEach(track => {
+                    track.enabled = !isVideoMuted;
+                });
+            }
+            const cameraButton = document.getElementById('cameraToggle');
+            cameraButton.innerHTML = isVideoMuted ? 
+                '<span class="camera-icon">📷</span> Start Video' : 
+                '<span class="camera-icon">📷</span> Stop Video';
+            cameraButton.classList.toggle('active', isVideoMuted);
+        });
+
+        document.getElementById('micToggle').addEventListener('click', () => {
+            isAudioMuted = !isAudioMuted;
+            if (localStream) {
+                localStream.getAudioTracks().forEach(track => {
+                    track.enabled = !isAudioMuted;
+                });
+            }
+            const micButton = document.getElementById('micToggle');
+            micButton.innerHTML = isAudioMuted ? 
+                '<span class="mic-icon">🎤</span> Unmute' : 
+                '<span class="mic-icon">🎤</span> Mute';
+            micButton.classList.toggle('active', isAudioMuted);
+        });
+
         function updateBoard(board) {
             const cells = document.getElementsByClassName('cell');
             for (let i = 0; i < cells.length; i++) {
                 cells[i].textContent = board[i] || '';
-                cells[i].className = 'cell' + (gameOver ? ' disabled' : '');
-            }
-        }
-
-        function updateStatus() {
-            const statusElement = document.getElementById('status');
-            if (gameOver) {
-                statusElement.textContent = 'Game Over';
-            } else {
-                statusElement.textContent = `You are Player ${playerSymbol}. ${currentPlayer}'s turn`;
+                cells[i].className = 'cell' + (board[i] ? ' disabled' : '');
             }
         }
 
         function updateGameState(data) {
             const winnerDisplay = document.getElementById('winnerDisplay');
             const restartButton = document.getElementById('restartButton');
-            
+            const status = document.getElementById('status');
+
             if (data.gameOver) {
                 if (data.winner === 'draw') {
                     winnerDisplay.textContent = "It's a Draw!";
@@ -568,12 +598,19 @@
                     winnerDisplay.textContent = `Player ${data.winner} Wins!`;
                 }
                 restartButton.style.display = 'block';
+                disableAllCells();
             } else {
                 winnerDisplay.textContent = '';
                 restartButton.style.display = 'none';
+                status.textContent = `You are Player ${playerSymbol}. ${currentPlayer}'s turn`;
             }
-            
-            updateStatus();
+        }
+
+        function disableAllCells() {
+            const cells = document.getElementsByClassName('cell');
+            for (let cell of cells) {
+                cell.classList.add('disabled');
+            }
         }
 
         function makeMove(position) {
@@ -592,34 +629,28 @@
         }
 
         function copyGameLink() {
-            navigator.clipboard.writeText(window.location.href)
+            const gameUrl = document.getElementById('gameUrl');
+            navigator.clipboard.writeText(gameUrl.textContent)
                 .then(() => {
-                    showToast();
+                    const toast = document.getElementById('toast');
+                    toast.style.display = 'block';
+                    setTimeout(() => {
+                        toast.style.display = 'none';
+                    }, 2000);
                 })
                 .catch(err => {
                     console.error('Failed to copy:', err);
                 });
         }
 
-        function showToast() {
-            const toast = document.getElementById('toast');
-            toast.style.display = 'block';
-            setTimeout(() => {
-                toast.style.display = 'none';
-            }, 2000);
-        }
-
-        // Handle page visibility changes
         document.addEventListener('visibilitychange', () => {
             if (document.hidden && localStream) {
-                // Pause video and audio when tab is not visible
                 localStream.getTracks().forEach(track => {
                     track.enabled = false;
                 });
                 document.getElementById('cameraToggle').classList.add('active');
                 document.getElementById('micToggle').classList.add('active');
             } else if (!document.hidden && localStream) {
-                // Resume video and audio when tab becomes visible (if not manually muted)
                 localStream.getTracks().forEach(track => {
                     if (track.kind === 'video' && !isVideoMuted) {
                         track.enabled = true;
@@ -633,7 +664,6 @@
             }
         });
 
-        // Handle before unload to cleanup resources
         window.addEventListener('beforeunload', () => {
             if (peerConnection) {
                 peerConnection.close();
@@ -646,7 +676,6 @@
             }
         });
 
-        // Initialize connection when page loads
         connect();
     </script>
 </body>
