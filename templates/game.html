@@ -1,0 +1,454 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Tic Tac Toe - Game</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <link rel="stylesheet" href="/static/css/game.css">
+    <style>
+        .voice-controls {
+            margin: 20px 0;
+            padding: 15px;
+            background: #f5f5f5;
+            border-radius: 8px;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            gap: 15px;
+            flex-wrap: wrap;
+        }
+
+        .voice-btn {
+            padding: 8px 16px;
+            border-radius: 5px;
+            border: 1px solid #ccc;
+            background: #fff;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            gap: 5px;
+            transition: all 0.3s;
+        }
+
+        .voice-btn.active {
+            background: #e0e0e0;
+        }
+
+        .voice-btn:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+
+        .connection-status {
+            font-size: 14px;
+            color: #666;
+            padding: 5px 10px;
+            border-radius: 4px;
+            background: #fff;
+        }
+
+        .audio-indicator {
+            width: 20px;
+            height: 20px;
+            border-radius: 50%;
+            background: #ccc;
+            margin-left: 10px;
+        }
+
+        .audio-indicator.active {
+            background: #4CAF50;
+            animation: pulse 1.5s infinite;
+        }
+
+        @keyframes pulse {
+            0% { transform: scale(1); }
+            50% { transform: scale(1.1); }
+            100% { transform: scale(1); }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Tic Tac Toe Game</h1>
+        
+        <!-- Voice Chat Controls -->
+        <div class="voice-controls">
+            <button id="micToggle" class="voice-btn" disabled>
+                <span class="mic-icon">🎤</span> Microphone
+            </button>
+            <button id="speakerToggle" class="voice-btn" disabled>
+                <span class="speaker-icon">🔊</span> Speaker
+            </button>
+            <div id="connectionStatus" class="connection-status">Voice: Waiting for opponent...</div>
+            <div id="audioIndicator" class="audio-indicator"></div>
+        </div>
+
+        <div class="game-link">
+            <div>Share this game with your opponent:</div>
+            <div class="copy-link">
+                <div class="game-url" id="gameUrl"></div>
+                <button class="copy-button" onclick="copyGameLink()">Copy Link</button>
+            </div>
+        </div>
+        <div id="status">Waiting for players...</div>
+        <div class="board" id="board">
+            <div class="cell" onclick="makeMove(0)"></div>
+            <div class="cell" onclick="makeMove(1)"></div>
+            <div class="cell" onclick="makeMove(2)"></div>
+            <div class="cell" onclick="makeMove(3)"></div>
+            <div class="cell" onclick="makeMove(4)"></div>
+            <div class="cell" onclick="makeMove(5)"></div>
+            <div class="cell" onclick="makeMove(6)"></div>
+            <div class="cell" onclick="makeMove(7)"></div>
+            <div class="cell" onclick="makeMove(8)"></div>
+        </div>
+        <div id="winnerDisplay" class="winner"></div>
+        <button id="restartButton" onclick="restartGame()">Play Again</button>
+    </div>
+    <div id="toast" class="toast">Link copied to clipboard!</div>
+
+    <script>
+        let socket;
+        let playerSymbol;
+        let currentPlayer;
+        let gameOver = false;
+        let peerConnection;
+        let localStream;
+        let remoteStream;
+        let isMuted = false;
+        let isSpeakerOn = true;
+        let audioContext;
+        let audioAnalyser;
+        let audioDataArray;
+
+        // WebRTC configuration
+        const configuration = {
+            iceServers: [
+                { urls: 'stun:stun.l.google.com:19302' },
+                { urls: 'stun:stun1.l.google.com:19302' },
+                { urls: 'stun:stun2.l.google.com:19302' },
+                { urls: 'stun:stun3.l.google.com:19302' },
+                { urls: 'stun:stun4.l.google.com:19302' }
+            ]
+        };
+
+        // Audio visualization setup
+        function setupAudioVisualization(stream) {
+            audioContext = new (window.AudioContext || window.webkitAudioContext)();
+            const source = audioContext.createMediaStreamSource(stream);
+            audioAnalyser = audioContext.createAnalyser();
+            audioAnalyser.fftSize = 32;
+            source.connect(audioAnalyser);
+            audioDataArray = new Uint8Array(audioAnalyser.frequencyBinCount);
+
+            // Visualize audio levels
+            function visualize() {
+                if (!audioAnalyser) return;
+                audioAnalyser.getByteFrequencyData(audioDataArray);
+                const audioLevel = audioDataArray.reduce((a, b) => a + b) / audioDataArray.length;
+                const indicator = document.getElementById('audioIndicator');
+                indicator.classList.toggle('active', audioLevel > 50);
+                requestAnimationFrame(visualize);
+            }
+            visualize();
+        }
+
+        async function initializeVoiceChat() {
+            try {
+                localStream = await navigator.mediaDevices.getUserMedia({ 
+                    audio: {
+                        echoCancellation: true,
+                        noiseSuppression: true,
+                        autoGainControl: true
+                    }
+                });
+                
+                setupAudioVisualization(localStream);
+                
+                const micToggle = document.getElementById('micToggle');
+                const speakerToggle = document.getElementById('speakerToggle');
+                micToggle.disabled = false;
+                speakerToggle.disabled = false;
+                
+                setupPeerConnection();
+                
+                document.getElementById('connectionStatus').textContent = 'Voice: Ready';
+            } catch (err) {
+                console.error('Error accessing microphone:', err);
+                document.getElementById('connectionStatus').textContent = 'Voice: Microphone access denied';
+            }
+        }
+
+        function setupPeerConnection() {
+            peerConnection = new RTCPeerConnection(configuration);
+
+            localStream.getTracks().forEach(track => {
+                peerConnection.addTrack(track, localStream);
+            });
+
+            peerConnection.ontrack = (event) => {
+                remoteStream = event.streams[0];
+                setupAudioVisualization(remoteStream);
+            };
+
+            peerConnection.onicecandidate = (event) => {
+                if (event.candidate) {
+                    socket.send(JSON.stringify({
+                        type: 'ice-candidate',
+                        candidate: event.candidate
+                    }));
+                }
+            };
+
+            peerConnection.onconnectionstatechange = () => {
+                const statusElement = document.getElementById('connectionStatus');
+                switch(peerConnection.connectionState) {
+                    case 'connected':
+                        statusElement.textContent = 'Voice: Connected';
+                        break;
+                    case 'disconnected':
+                        statusElement.textContent = 'Voice: Disconnected';
+                        break;
+                    case 'failed':
+                        statusElement.textContent = 'Voice: Connection failed';
+                        break;
+                }
+            };
+        }
+
+        document.getElementById('micToggle').addEventListener('click', () => {
+            isMuted = !isMuted;
+            if (localStream) {
+                localStream.getAudioTracks()[0].enabled = !isMuted;
+            }
+            const micButton = document.getElementById('micToggle');
+            micButton.innerHTML = isMuted ? 
+                '<span class="mic-icon">🎤</span> Unmute' : 
+                '<span class="mic-icon">🎤</span> Mute';
+            micButton.classList.toggle('active', isMuted);
+        });
+
+        document.getElementById('speakerToggle').addEventListener('click', () => {
+            isSpeakerOn = !isSpeakerOn;
+            if (remoteStream) {
+                remoteStream.getAudioTracks()[0].enabled = isSpeakerOn;
+            }
+            const speakerButton = document.getElementById('speakerToggle');
+            speakerButton.innerHTML = isSpeakerOn ? 
+                '<span class="speaker-icon">🔊</span> Speaker' : 
+                '<span class="speaker-icon">🔈</span> Muted';
+            speakerButton.classList.toggle('active', !isSpeakerOn);
+        });
+
+        function connect() {
+            const gameId = window.location.pathname.split('/').pop();
+            const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+            const wsUrl = `${protocol}//${window.location.host}/ws/${gameId}`;
+            
+            document.getElementById('gameUrl').textContent = window.location.href;
+            
+            socket = new WebSocket(wsUrl);
+
+            socket.onopen = function() {
+                initializeVoiceChat();
+            };
+
+            socket.onmessage = async function(event) {
+                const data = JSON.parse(event.data);
+                
+                switch(data.type) {
+                    case 'ice-candidate':
+                        if (peerConnection) {
+                            try {
+                                await peerConnection.addIceCandidate(data.candidate);
+                            } catch (err) {
+                                console.error('Error adding ICE candidate:', err);
+                            }
+                        }
+                        break;
+
+                    case 'offer':
+                        if (peerConnection) {
+                            try {
+                                await peerConnection.setRemoteDescription(new RTCSessionDescription(data.offer));
+                                const answer = await peerConnection.createAnswer();
+                                await peerConnection.setLocalDescription(answer);
+                                socket.send(JSON.stringify({
+                                    type: 'answer',
+                                    answer: answer
+                                }));
+                            } catch (err) {
+                                console.error('Error handling offer:', err);
+                            }
+                        }
+                        break;
+
+                    case 'answer':
+                        if (peerConnection) {
+                            try {
+                                await peerConnection.setRemoteDescription(new RTCSessionDescription(data.answer));
+                            } catch (err) {
+                                console.error('Error handling answer:', err);
+                            }
+                        }
+                        break;
+
+                    case 'init':
+                        playerSymbol = data.symbol;
+                        currentPlayer = data.currentPlayer;
+                        gameOver = data.gameOver;
+                        updateBoard(data.board);
+                        updateGameState(data);
+                        
+                        if (data.playersReady === 2) {
+                            updateStatus();
+                            if (playerSymbol === 'O' && peerConnection) {
+                                try {
+                                    const offer = await peerConnection.createOffer();
+                                    await peerConnection.setLocalDescription(offer);
+                                    socket.send(JSON.stringify({
+                                        type: 'offer',
+                                        offer: offer
+                                    }));
+                                } catch (err) {
+                                    console.error('Error creating offer:', err);
+                                }
+                            }
+                        }
+                        break;
+
+                    case 'update':
+                        currentPlayer = data.currentPlayer;
+                        gameOver = data.gameOver;
+                        updateBoard(data.board);
+                        updateGameState(data);
+                        break;
+                }
+            };
+
+            socket.onerror = function(error) {
+                console.error('WebSocket Error:', error);
+                document.getElementById('connectionStatus').textContent = 'Connection error';
+            };
+
+            socket.onclose = function() {
+                console.log('WebSocket Connection Closed');
+                document.getElementById('connectionStatus').textContent = 'Disconnected';
+                if (peerConnection) {
+                    peerConnection.close();
+                }
+                if (localStream) {
+                    localStream.getTracks().forEach(track => track.stop());
+                }
+                if (audioContext) {
+                    audioContext.close();
+                }
+            };
+        }
+
+        function updateBoard(board) {
+            const cells = document.getElementsByClassName('cell');
+            for (let i = 0; i < cells.length; i++) {
+                cells[i].textContent = board[i] || '';
+                cells[i].className = 'cell' + (gameOver ? ' disabled' : '');
+            }
+        }
+
+        function updateStatus() {
+            const statusElement = document.getElementById('status');
+            if (gameOver) {
+                statusElement.textContent = 'Game Over';
+            } else {
+                statusElement.textContent = `You are Player ${playerSymbol}. ${currentPlayer}'s turn`;
+            }
+        }
+
+        function updateGameState(data) {
+            const winnerDisplay = document.getElementById('winnerDisplay');
+            const restartButton = document.getElementById('restartButton');
+            
+            if (data.gameOver) {
+                if (data.winner === 'draw') {
+                    winnerDisplay.textContent = "It's a Draw!";
+                } else {
+                    winnerDisplay.textContent = `Player ${data.winner} Wins!`;
+                }
+                restartButton.style.display = 'block';
+            } else {
+                winnerDisplay.textContent = '';
+                restartButton.style.display = 'none';
+            }
+            
+            updateStatus();
+        }
+
+        function makeMove(position) {
+            if (!gameOver && currentPlayer === playerSymbol) {
+                socket.send(JSON.stringify({
+                    type: 'move',
+                    position: position
+                }));
+            }
+        }
+
+        function restartGame() {
+            socket.send(JSON.stringify({
+                type: 'restart'
+            }));
+        }
+
+        function copyGameLink() {
+            navigator.clipboard.writeText(window.location.href)
+                .then(() => {
+                    showToast();
+                })
+                .catch(err => {
+                    console.error('Failed to copy:', err);
+                });
+        }
+
+        function showToast() {
+            const toast = document.getElementById('toast');
+            toast.style.display = 'block';
+            setTimeout(() => {
+                toast.style.display = 'none';
+            }, 2000);
+        }
+
+        // Handle page visibility changes
+        document.addEventListener('visibilitychange', () => {
+            if (document.hidden && localStream) {
+                // Mute audio when tab is not visible
+                localStream.getAudioTracks().forEach(track => {
+                    track.enabled = false;
+                });
+                document.getElementById('micToggle').classList.add('active');
+            } else if (!document.hidden && localStream && !isMuted) {
+                // Unmute audio when tab becomes visible (if not manually muted)
+                localStream.getAudioTracks().forEach(track => {
+                    track.enabled = true;
+                });
+                document.getElementById('micToggle').classList.remove('active');
+            }
+        });
+
+        // Handle before unload to cleanup resources
+        window.addEventListener('beforeunload', () => {
+            if (peerConnection) {
+                peerConnection.close();
+            }
+            if (localStream) {
+                localStream.getTracks().forEach(track => track.stop());
+            }
+            if (audioContext) {
+                audioContext.close();
+            }
+            if (socket) {
+                socket.close();
+            }
+        });
+
+        // Initialize connection when page loads
+        connect();
+    </script>
+</body>
+</html>

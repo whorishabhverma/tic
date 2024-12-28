@@ -1,0 +1,74 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Tic Tac Toe - Home</title>
+    <link rel="icon" href="/static/css/tic-tac-toe-icon.jpg" type="image/png">
+    <link rel="stylesheet" href="/static/css/styles.css">
+    <style>
+        .container {
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+            text-align: center;
+        }
+
+        .voice-controls {
+            margin: 20px 0;
+            padding: 15px;
+            background: #f5f5f5;
+            border-radius: 8px;
+        }
+
+        .voice-btn {
+            padding: 10px 20px;
+            margin: 0 10px;
+            border-radius: 5px;
+            border: 1px solid #ccc;
+            background: #fff;
+            cursor: pointer;
+            transition: background-color 0.3s;
+        }
+
+        .voice-btn:hover {
+            background: #e0e0e0;
+        }
+
+        .voice-btn:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+
+        .create-game-btn {
+            padding: 15px 30px;
+            font-size: 1.2em;
+            background-color: #4CAF50;
+            color: white;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+            transition: background-color 0.3s;
+        }
+
+        .create-game-btn:hover {
+            background-color: #45a049;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Tic Tac Toe with Voice Chat</h1>
+        <p>Create a new game and share the link with your friend to play together!</p>
+
+        <button class="create-game-btn" onclick="createGame()">Create New Game</button>
+    </div>
+
+    <script>
+        function createGame() {
+            const gameId = Math.random().toString(36).substring(7);
+            window.location.href = `/game/${gameId}`;
+        }
+    </script>
+</body>
+</html>
